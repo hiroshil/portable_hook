@@ -1,0 +1,13 @@
+[package]
+name = "portable_hook"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `static-detour` feature requires nightly
+retour = { version = "0.4.0-alpha.3", features = ["static-detour"] }
+windows = { version = "0.52", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", ] }
+windows-sys = { version = "0.52", features = ["Win32_System_Environment", ] }
