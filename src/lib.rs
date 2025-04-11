@@ -4,8 +4,10 @@ use std::os::raw::c_void;
 use std::mem;
 use windows::core::{PSTR, PWSTR, HRESULT, BOOL};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{HANDLE, HWND, HMODULE};
 use windows::Win32::System::Environment::{GetCurrentDirectoryA, GetCurrentDirectoryW};
+use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::SystemServices::{
   DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, DLL_THREAD_ATTACH, DLL_THREAD_DETACH,
 };
@@ -17,12 +19,14 @@ static_detour! {
   static GetFolderPathWHook: unsafe extern "system" fn(HWND, i32, HANDLE, u32, PWSTR) -> HRESULT;
   static GetPathFromIDListAHook: unsafe extern "system" fn(*const ITEMIDLIST, PSTR) -> BOOL;
   static GetPathFromIDListWHook: unsafe extern "system" fn(*const ITEMIDLIST, PWSTR) -> BOOL;
+  static GetVersionExWHook: unsafe extern "system" fn(*mut OSVERSIONINFOW) -> BOOL;
 }
 
 type FnGetFolderPathA = unsafe extern "system" fn(HWND, i32, HANDLE, u32, PSTR) -> HRESULT;
 type FnGetFolderPathW = unsafe extern "system" fn(HWND, i32, HANDLE, u32, PWSTR) -> HRESULT;
 type FnGetPathFromIDListA = unsafe extern "system" fn(*const ITEMIDLIST, PSTR) -> BOOL;
 type FnGetPathFromIDListW = unsafe extern "system" fn(*const ITEMIDLIST, PWSTR) -> BOOL;
+type FnGetVersionExW = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> BOOL;
 
 unsafe fn main() -> Result<(), Box<dyn Error>> {
 	
@@ -56,6 +60,14 @@ unsafe fn main() -> Result<(), Box<dyn Error>> {
 
   GetPathFromIDListWHook
     .initialize(gpfilw_target, getpathfromidlistw_detour)?
+    .enable()?;
+  
+  let gvew_address = utils::get_module_symbol_address("kernel32.dll", "GetVersionExW")
+    .expect("could not find 'GetVersionExW' address");
+  let gvew_target: FnGetVersionExW = mem::transmute(gvew_address);
+
+  GetVersionExWHook
+    .initialize(gvew_target, getversionexw_detour)?
     .enable()?;
   Ok(())
 }
@@ -115,6 +127,19 @@ fn getpathfromidlistw_detour(pidl: *const ITEMIDLIST, pszpath: PWSTR) -> BOOL {
 		else{
 			  result
 		} 
+	}
+}
+
+fn getversionexw_detour(lpversioninformation: *mut OSVERSIONINFOW) -> BOOL {
+  unsafe { 
+		let result: BOOL = GetVersionExWHook.call(lpversioninformation);
+		let mut filename_buf = [0u16; 260];
+		GetModuleFileNameW(Some(HMODULE::default()), &mut filename_buf);
+		let filename = utils::u16_array_to_string(&filename_buf).unwrap();
+		if filename.contains("AdvHD") {
+			(*lpversioninformation).dwMajorVersion = 0u32;
+		}
+		result
 	}
 }
 
