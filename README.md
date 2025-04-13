@@ -8,6 +8,7 @@ This project is designed to hook into a visual novel galge game running in a dow
 - **Hooked Functions**:
   - `SHGetFolderPath`
   - `SHGetPathFromIDList`
+  - `SHGetSpecialFolderPath`
 - **Future Plans**:
   - Implement registry key reading functionality.
 

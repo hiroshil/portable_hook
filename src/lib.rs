@@ -19,6 +19,8 @@ static_detour! {
   static GetFolderPathWHook: unsafe extern "system" fn(HWND, i32, HANDLE, u32, PWSTR) -> HRESULT;
   static GetPathFromIDListAHook: unsafe extern "system" fn(*const ITEMIDLIST, PSTR) -> BOOL;
   static GetPathFromIDListWHook: unsafe extern "system" fn(*const ITEMIDLIST, PWSTR) -> BOOL;
+  static GetSpecialFolderPathAHook: unsafe extern "system" fn(HWND, PSTR, i32, BOOL) -> BOOL;
+  static GetSpecialFolderPathWHook: unsafe extern "system" fn(HWND, PWSTR, i32, BOOL) -> BOOL;
   static GetVersionExWHook: unsafe extern "system" fn(*mut OSVERSIONINFOW) -> BOOL;
 }
 
@@ -26,6 +28,8 @@ type FnGetFolderPathA = unsafe extern "system" fn(HWND, i32, HANDLE, u32, PSTR) 
 type FnGetFolderPathW = unsafe extern "system" fn(HWND, i32, HANDLE, u32, PWSTR) -> HRESULT;
 type FnGetPathFromIDListA = unsafe extern "system" fn(*const ITEMIDLIST, PSTR) -> BOOL;
 type FnGetPathFromIDListW = unsafe extern "system" fn(*const ITEMIDLIST, PWSTR) -> BOOL;
+type FnGetSpecialFolderPathA = unsafe extern "system" fn(HWND, PSTR, i32, BOOL) -> BOOL;
+type FnGetSpecialFolderPathW = unsafe extern "system" fn(HWND, PWSTR, i32, BOOL) -> BOOL;
 type FnGetVersionExW = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> BOOL;
 
 unsafe fn main() -> Result<(), Box<dyn Error>> {
@@ -60,6 +64,22 @@ unsafe fn main() -> Result<(), Box<dyn Error>> {
 
   GetPathFromIDListWHook
     .initialize(gpfilw_target, getpathfromidlistw_detour)?
+    .enable()?;
+  
+  let gsfpa_address = utils::get_module_symbol_address("shell32.dll", "SHGetSpecialFolderPathA")
+    .expect("could not find 'SHGetSpecialFolderPathA' address");
+  let gsfpa_target: FnGetSpecialFolderPathA = mem::transmute(gsfpa_address);
+
+  GetSpecialFolderPathAHook
+    .initialize(gsfpa_target, getspecialfolderpatha_detour)?
+    .enable()?;
+  
+  let gsfpw_address = utils::get_module_symbol_address("shell32.dll", "SHGetSpecialFolderPathW")
+    .expect("could not find 'SHGetSpecialFolderPathW' address");
+  let gsfpw_target: FnGetSpecialFolderPathW = mem::transmute(gsfpw_address);
+
+  GetSpecialFolderPathWHook
+    .initialize(gsfpw_target, getspecialfolderpathw_detour)?
     .enable()?;
   
   let gvew_address = utils::get_module_symbol_address("kernel32.dll", "GetVersionExW")
@@ -127,6 +147,32 @@ fn getpathfromidlistw_detour(pidl: *const ITEMIDLIST, pszpath: PWSTR) -> BOOL {
 		else{
 			  result
 		} 
+	}
+}
+
+fn getspecialfolderpatha_detour(hwnd: HWND, pszpath: PSTR, csidl: i32, fcreate: BOOL) -> BOOL {
+  unsafe { 
+		let mut current_path = [0u8; 260];
+		match GetCurrentDirectoryA(Some(&mut current_path)) {
+				0u32 => BOOL(0),
+				_ => {
+					std::ptr::copy_nonoverlapping(current_path.as_ptr(), pszpath.as_ptr(), 260);
+					BOOL(1)
+				},
+			}
+	}
+}
+
+fn getspecialfolderpathw_detour(hwnd: HWND, pszpath: PWSTR, csidl: i32, fcreate: BOOL) -> BOOL {
+  unsafe { 
+		let mut current_path = [0u16; 260];
+		match GetCurrentDirectoryW(Some(&mut current_path)) {
+				0u32 => BOOL(0),
+				_ => {
+					std::ptr::copy_nonoverlapping(current_path.as_ptr(), pszpath.as_ptr(), 260);
+					BOOL(1)
+				},
+			}
 	}
 }
 
