@@ -1,4 +1,4 @@
-use std::{ffi::CStr, ffi::CString, path::PathBuf};
+use std::{cell::Cell, ffi::CStr, ffi::CString, path::PathBuf};
 use windows::core::{PCSTR, PCWSTR, PSTR, PWSTR};
 use windows::Win32::System::Environment::{GetCurrentDirectoryA, GetCurrentDirectoryW};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -11,6 +11,33 @@ pub enum AppDataKind {
     LocalLow,
     Documents,
     SavedGames,
+}
+
+thread_local! {
+    static REDIRECT_BYPASS_DEPTH: Cell<u32> = Cell::new(0);
+}
+
+struct RedirectBypassGuard;
+
+impl RedirectBypassGuard {
+    fn enter() -> Self {
+        REDIRECT_BYPASS_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_add(1));
+        });
+        Self
+    }
+}
+
+impl Drop for RedirectBypassGuard {
+    fn drop(&mut self) {
+        REDIRECT_BYPASS_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
+}
+
+fn redirect_bypassed() -> bool {
+    REDIRECT_BYPASS_DEPTH.with(|depth| depth.get() != 0)
 }
 
 pub fn get_module_symbol_address(module: &str, symbol: &str) -> Option<usize> {
@@ -54,23 +81,39 @@ pub unsafe fn pcwstr_to_wide(input: PCWSTR) -> Option<Vec<u16>> {
 
 pub fn current_dir_a() -> Option<Vec<u8>> {
     unsafe {
-        let mut buffer = [0u8; 32768];
+        let required = GetCurrentDirectoryA(None);
+        if required == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u8; required as usize];
+
         let len = GetCurrentDirectoryA(Some(&mut buffer));
         if len == 0 || len as usize >= buffer.len() {
             return None;
         }
-        Some(buffer[..len as usize].to_vec())
+
+        buffer.truncate(len as usize);
+        Some(buffer)
     }
 }
 
 pub fn current_dir_w() -> Option<Vec<u16>> {
     unsafe {
-        let mut buffer = [0u16; 32768];
+        let required = GetCurrentDirectoryW(None);
+        if required == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; required as usize];
+
         let len = GetCurrentDirectoryW(Some(&mut buffer));
         if len == 0 || len as usize >= buffer.len() {
             return None;
         }
-        Some(buffer[..len as usize].to_vec())
+
+        buffer.truncate(len as usize);
+        Some(buffer)
     }
 }
 
@@ -222,6 +265,10 @@ fn append_suffix_w(mut base: Vec<u16>, suffix: &[u16]) -> Vec<u16> {
 }
 
 pub fn redirect_appdata_path_a(path: &[u8]) -> Option<Vec<u8>> {
+    if redirect_bypassed() {
+        return None;
+    }
+
     let norm = normalized_bytes(path);
 
     let env_patterns: [(&[u8], AppDataKind); 6] = [
@@ -266,6 +313,10 @@ pub fn redirect_appdata_path_a(path: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn redirect_appdata_path_w(path: &[u16]) -> Option<Vec<u16>> {
+    if redirect_bypassed() {
+        return None;
+    }
+
     let norm = normalized_wide(path);
 
     let env_patterns: [(Vec<u16>, AppDataKind); 6] = [
@@ -446,6 +497,7 @@ pub unsafe fn write_sized_w(dst: PWSTR, size: u32, src: &[u16], include_nul_in_s
 pub fn ensure_parent_dir_a(path: &[u8]) {
     if let Ok(s) = String::from_utf8(path.to_vec()) {
         if let Some(parent) = PathBuf::from(s).parent() {
+            let _bypass = RedirectBypassGuard::enter();
             let _ = std::fs::create_dir_all(parent);
         }
     }
@@ -454,18 +506,21 @@ pub fn ensure_parent_dir_a(path: &[u8]) {
 pub fn ensure_parent_dir_w(path: &[u16]) {
     let s = String::from_utf16_lossy(path);
     if let Some(parent) = PathBuf::from(s).parent() {
+        let _bypass = RedirectBypassGuard::enter();
         let _ = std::fs::create_dir_all(parent);
     }
 }
 
 pub fn ensure_dir_a(path: &[u8]) {
     if let Ok(s) = String::from_utf8(path.to_vec()) {
+        let _bypass = RedirectBypassGuard::enter();
         let _ = std::fs::create_dir_all(s);
     }
 }
 
 pub fn ensure_dir_w(path: &[u16]) {
     let s = String::from_utf16_lossy(path);
+    let _bypass = RedirectBypassGuard::enter();
     let _ = std::fs::create_dir_all(s);
 }
 
